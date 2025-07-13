@@ -3,6 +3,8 @@ import dns.resolver
 import argparse
 import sys
 import json
+import os
+import datetime
 
 parser = argparse.ArgumentParser(
     description="Gives you A, AAA, MX, NS, TXT, CNAME for the domain name you enter"
@@ -11,12 +13,26 @@ parser.add_argument("domain_name", type=str, help="The name of the host")
 parser.add_argument(
     "-o",
     "--only",
+    choices=["A", "AAAA", "MX", "NS", "TXT", "CNAME"],
     type=str,
     nargs="+",
     help="If only a specific record is needed(optional)",
 )
 parser.add_argument(
-    "-s", "--out", action="store_true", help="Save output to file in jason"
+    "--out",
+    choices=["txt", "json"],
+    type=str,
+    help="Save output to file in json and txt format",
+)
+parser.add_argument(
+    "--no-reverse", action="store_true", help="This skips the reverse ip lookup"
+)
+parser.add_argument(
+    "--config",
+    choices=["1.1.1.1", "8.8.8.8", "9.9.9.9", "8.8.4.4", "1.0.0.1", "208.67.222.222"],
+    type=str,
+    default=None,
+    help="Set a desired public DNS recursive",
 )
 args = parser.parse_args()
 
@@ -24,11 +40,13 @@ args = parser.parse_args()
 # It gets record by using dns resolver and catch error if it occurs
 
 
-def records_check(domain, record_type):
+def records_check(domain, record_type, server_ip):
     record = {record_type: None, "error": None}
     try:
+        resolve = dns.resolver.Resolver()
+        resolve.nameservers = [server_ip or "1.1.1.1"]
         record[record_type] = [
-            r.to_text() for r in dns.resolver.resolve(domain, record_type)
+            r.to_text() for r in resolve.resolve(domain, record_type)
         ]
     except Exception as e:
         record["error"] = str(e)
@@ -38,14 +56,14 @@ def records_check(domain, record_type):
 # It call records_check function to A, AAAA, MX, NS, TXT, CNAME dns records
 
 
-def get_dns_records(domain):
+def get_dns_records(domain, config_ip):
     return [
-        records_check(domain, "A"),
-        records_check(domain, "AAAA"),
-        records_check(domain, "MX"),
-        records_check(domain, "NS"),
-        records_check(domain, "TXT"),
-        records_check(domain, "CNAME"),
+        records_check(domain, "A", config_ip),
+        records_check(domain, "AAAA", config_ip),
+        records_check(domain, "MX", config_ip),
+        records_check(domain, "NS", config_ip),
+        records_check(domain, "TXT", config_ip),
+        records_check(domain, "CNAME", config_ip),
     ]
 
 
@@ -53,20 +71,20 @@ def get_dns_records(domain):
 
 
 def get_ip(host):
-    ip_handle = {"ip": [], "reverse": None, "error": None}
+    ip_handle = {"ip": [], "reverse_ip": None, "error": None}
     try:
         for add in socket.getaddrinfo(host, None):
-            if add in ip_handle["ip"]:
+            if add[4][0] in ip_handle["ip"]:
                 continue
             else:
                 ip_handle["ip"].append(add[4][0])
         try:
-            ip_handle["reverse"] = [
+            ip_handle["reverse_ip"] = [
                 socket.gethostbyaddr(ip)[0] for ip in ip_handle["ip"]
             ]
-        except socket.gaierror as e:
+        except Exception as e:
             ip_handle["error"] = str(e)
-    except socket.gaierror as e:
+    except Exception as e:
         ip_handle["error"] = str(e)
     return ip_handle
 
@@ -81,9 +99,9 @@ def simple_print(resolve):
             prev_key = key
             continue
         elif key == "error":
-            print(f"{prev_key} Lookup Error: {json.dumps(value)}")
+            print(f"{prev_key} Lookup Error: {json.dumps(value, indent=4)}")
         else:
-            print(f"{key}:{json.dumps(value)}")
+            print(f"{key}:{json.dumps(value, indent=4)}")
         prev_key = key
     print("-----")
 
@@ -100,60 +118,71 @@ def is_valid_char(c):
 # Function which get ip,reverse and all the record type
 
 
-def collects_DNS(domain_name):
+def collects_DNS(domain_name, dns_ip):
 
-    dns_resolve = get_dns_records(domain_name)
-    dns_lookup = get_ip(domain_name)
-    print(f"== DNS LOOKUP FOR: {domain_name} ==\n")
-    print("== REVERSE IP LOOKUP ==\n")
-    for key in dns_lookup:
-        if key == "error" and dns_lookup[key] == None:
-            continue
-        elif key == "error":
-            print(f"IP Lookup Error: {dns_lookup[key]}\n")
-        elif key == "ip":
-            continue
-        else:
-            print(f"{key}: {dns_lookup[key]}\n")
-    for resolve in dns_resolve:
-        simple_print(resolve)
+    dns_resolve = get_dns_records(domain_name, dns_ip)
+
+    if not args.no_reverse:
+        dns_lookup = get_ip(domain_name)
+        del dns_lookup["ip"]
+        dns_resolve.append(dns_lookup)
+    if not args.out:
+        for resolve in dns_resolve:
+            simple_print(resolve)
+    else:
+        write_record_to_file(f"All_records.{args.out}", dns_resolve)
 
 
-# "Multiple records will overwrite the same file. Later, filename customization is recommended."
-def write_record_to_file(rec):
-    with open("DNS_lookup_record.json", "w") as f:
-        json.dump(rec, f, indent=4)
-    print("Saved in file")
+# Write the record in jason or txt format
+def write_record_to_file(file_name, rec):
+    bash_name, exe = os.path.splitext(file_name)
+    timestamp = datetime.datetime.now().strftime("%d%m%Y_%H_%M_%S")
+    new_filename = f"{bash_name}_{timestamp}{exe}"
+    try:
+        with open(new_filename, "w") as f:
+            if exe == ".json":
+                json.dump(rec, f, indent=4)
+            else:
+                if isinstance(rec, list):
+                    for records_val in rec:
+                        f.write(f"{str(records_val)}\n")
+                else:
+                    f.write("{\n")
+                    for key, value in rec.items():
+                        f.write(f"\t{key}: {value}" + "\n")
+                    f.write("}\n")
+            print(f"File has been saved as {new_filename}")
+    except IOError as e:
+        print(f"Error saving file {e}")
 
 
 # Main function
 
 
 def main():
+    if not args.config:
+        print("Default DNS resolver: 1.1.1.1\n")
     domain_name = args.domain_name.strip().replace(" ", "").lower()
     for char in domain_name:
         if not is_valid_char(char):
             print("DNS Host Name is Invalid")
             sys.exit(1)  ## Exit if domain or record type is invalid
-    valid_checks = {"A", "AAAA", "MX", "NS", "TXT", "CNAME"}
     if args.only == None:
-        collects_DNS(domain_name)
+        collects_DNS(domain_name, args.config)
     else:
-        requested_records = [s.upper() for s in args.only]
-        for record_type in requested_records:
-            if record_type not in valid_checks:
-                print(f"Unsupported record type: {record_type}")
-                sys.exit(1)
-        if len(requested_records) > 1:
-            for record_type in requested_records:
-                record = records_check(domain_name, record_type)
+        if len(args.only) > 1:
+            for record_type in args.only:
+                record = records_check(domain_name, record_type, args.config)
                 if not args.out:
                     simple_print(record)
                 else:
-                    write_record_to_file(record)
+                    write_record_to_file(f"{record_type}_record.{args.out}", record)
         else:
-            record = records_check(domain_name, requested_records[0])
-            simple_print(record)
+            record = records_check(domain_name, args.only[0], args.config)
+            if not args.out:
+                simple_print(record)
+            else:
+                write_record_to_file(f"{args.only[0]}_record.{args.out}", record)
 
 
 if __name__ == "__main__":
