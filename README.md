@@ -23,8 +23,7 @@ Input Validation: Basic validation for domain names to ensure correct formatting
 🚀 Installation
 Clone the repository:
 
-git clone https://github.com/EchoingLoop/python-dns-tool.git
-cd python-dns-tool
+git clone https://github.com/TheForgettenFool/python-dns-tool.git
 
 
 Install dependencies:
